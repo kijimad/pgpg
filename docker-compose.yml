@@ -1,0 +1,27 @@
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_USER: postgres
+    ports:
+      - "15433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  pg-experiment:
+    build: .
+    environment:
+      PG_BACKEND: postgres://postgres@postgres/postgres
+      PG_PROXY_HOST: 0.0.0.0
+      PG_PROXY_PORT: 15432
+    ports:
+      - "15432:15432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
