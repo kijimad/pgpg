@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -174,4 +175,126 @@ func TestIntegration_EchoExplainQuery(t *testing.T) {
 	// エコー行の検証
 	assert.True(t, len(echoLine) > 0 && echoLine[0] == '>', "Echo line should start with >")
 	assert.Contains(t, echoLine, "EXPLAIN", "Echo should contain EXPLAIN")
+}
+
+func TestIntegration_EchoOutputSnapshot(t *testing.T) {
+	be, err := New("postgres://postgres@localhost:15433/postgres?sslmode=disable")
+	require.NoError(t, err)
+
+	// エコー機能を有効化してサーバーを作成
+	server := NewServer("localhost", "15445", be, true)
+	go server.Start()
+	time.Sleep(500 * time.Millisecond)
+
+	tests := []struct {
+		name     string
+		query    string
+		expected string // 期待される出力の完全一致
+	}{
+		{
+			name:  "simple select",
+			query: "SELECT 'hello' AS greeting",
+			expected: ` > SELECT 'hello' AS greeting
+
+ hello
+
+`,
+		},
+		{
+			name:  "numeric query",
+			query: "SELECT 42 AS answer",
+			expected: ` > SELECT 42 AS answer
+
+     42
+
+`,
+		},
+		{
+			name:  "multiline query",
+			query: "SELECT 1 AS first,\n       2 AS second",
+			expected: ` > SELECT 1 AS first,
+ >        2 AS second
+
+     1 |      2
+
+`,
+		},
+		{
+			name:  "japanese characters",
+			query: "SELECT 'こんにちは' AS greeting",
+			expected: ` > SELECT 'こんにちは' AS greeting
+
+ こんにちは
+
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command("psql",
+				"-h", "localhost",
+				"-p", "15445",
+				"-U", "postgres",
+				"-d", "postgres",
+				"-c", tt.query,
+				"-t", // タプルのみ（ヘッダーなし）
+			)
+
+			output, err := cmd.CombinedOutput()
+			require.NoError(t, err, "psql command failed: %s", string(output))
+
+			result := string(output)
+
+			// 完全一致を検証
+			assert.Equal(t, tt.expected, result, "Output should match exactly")
+		})
+	}
+}
+
+func TestIntegration_EchoComplexSnapshot(t *testing.T) {
+	be, err := New("postgres://postgres@localhost:15433/postgres?sslmode=disable")
+	require.NoError(t, err)
+
+	// エコー機能を有効化してサーバーを作成
+	server := NewServer("localhost", "15446", be, true)
+	go server.Start()
+	time.Sleep(500 * time.Millisecond)
+
+	// psqlで一連のクエリを実行して出力を確認
+	query := `
+CREATE TABLE users (name varchar(255), tel integer);
+INSERT INTO users (name, tel) VALUES ('きじま', 100);
+SELECT name, tel FROM users;
+`
+
+	cmd := exec.Command("psql",
+		"-h", "localhost",
+		"-p", "15446",
+		"-U", "postgres",
+		"-d", "postgres",
+		"-c", query,
+		"-t",
+	)
+
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "psql command failed: %s", string(output))
+
+	result := string(output)
+
+	// 期待される出力（完全一致）
+	// 注意: エコー行 "> " の末尾に空白が入る
+	expected := ` > 
+ > CREATE TABLE users (name varchar(255), tel integer);
+ > INSERT INTO users (name, tel) VALUES ('きじま', 100);
+ > SELECT name, tel FROM users;
+ > 
+
+CREATE TABLE
+INSERT 0 1
+ きじま | 100
+
+`
+
+	assert.Equal(t, expected, result, "Output should match exactly")
 }
