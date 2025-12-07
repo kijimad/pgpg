@@ -18,6 +18,7 @@ func main() {
 	backendDSN := getEnv("PG_BACKEND", "postgres://postgres@localhost/postgres")
 	proxyHost := getEnv("PG_PROXY_HOST", "localhost")
 	proxyPort := getEnv("PG_PROXY_PORT", "15432")
+	echoQueries := getEnv("PG_ECHO_QUERIES", "") == "on"
 
 	// バックエンドに接続
 	log.Printf("Connecting to backend: %s", backendDSN)
@@ -27,7 +28,7 @@ func main() {
 	}
 
 	// プロキシサーバを起動
-	srv := server.NewServer(proxyHost, proxyPort, be)
+	srv := server.NewServer(proxyHost, proxyPort, be, echoQueries)
 	if err := srv.Start(); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}

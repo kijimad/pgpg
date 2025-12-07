@@ -11,16 +11,18 @@ import (
 )
 
 type Server struct {
-	host    string
-	port    string
-	backend *PGClient
+	host        string
+	port        string
+	backend     *PGClient
+	echoQueries bool
 }
 
-func NewServer(host, port string, backend *PGClient) *Server {
+func NewServer(host, port string, backend *PGClient, echoQueries bool) *Server {
 	return &Server{
-		host:    host,
-		port:    port,
-		backend: backend,
+		host:        host,
+		port:        port,
+		backend:     backend,
+		echoQueries: echoQueries,
 	}
 }
 
@@ -60,7 +62,7 @@ func (s *Server) Start() error {
 func (s *Server) handleConnection(conn net.Conn) {
 	ctx := context.Background()
 
-	handler := NewSimpleConnectionHandler(conn, s.backend.ConnString())
+	handler := NewConnectionHandler(conn, s.backend.ConnString(), s.echoQueries)
 	handler.Handle(ctx,
 		func(dbName string) error {
 			return s.backend.CreateTempDB(ctx, dbName)

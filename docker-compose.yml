@@ -19,6 +19,7 @@ services:
       PG_BACKEND: postgres://postgres@postgres/postgres
       PG_PROXY_HOST: 0.0.0.0
       PG_PROXY_PORT: 15432
+      PG_ECHO_QUERIES: "on"
     ports:
       - "15432:15432"
     depends_on:

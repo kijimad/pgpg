@@ -17,7 +17,7 @@ func getTestDSN() string {
 	return dsn
 }
 
-func connectSimple(ctx context.Context, t *testing.T, port string) *pgx.Conn {
+func connect(ctx context.Context, t *testing.T, port string) *pgx.Conn {
 	dsn := fmt.Sprintf("postgres://postgres@localhost:%s/postgres?sslmode=disable", port)
 	config, _ := pgx.ParseConfig(dsn)
 	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol

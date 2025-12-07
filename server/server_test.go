@@ -17,7 +17,7 @@ func TestProxyServer(t *testing.T) {
 	require.NoError(t, err)
 
 	// プロキシサーバを起動
-	server := NewServer("localhost", "15433", be)
+	server := NewServer("localhost", "15433", be, false)
 	go func() {
 		if err := server.Start(); err != nil {
 			t.Logf("Server error: %v", err)
@@ -52,7 +52,7 @@ func TestProxyServerWithTable(t *testing.T) {
 	require.NoError(t, err)
 
 	// プロキシサーバを起動
-	server := NewServer("localhost", "15434", be)
+	server := NewServer("localhost", "15434", be, false)
 	go func() {
 		if err := server.Start(); err != nil {
 			t.Logf("Server error: %v", err)
@@ -112,7 +112,7 @@ func TestMultipleConnections(t *testing.T) {
 	require.NoError(t, err)
 
 	// プロキシサーバを起動
-	server := NewServer("localhost", "15435", be)
+	server := NewServer("localhost", "15435", be, false)
 	go func() {
 		if err := server.Start(); err != nil {
 			t.Logf("Server error: %v", err)

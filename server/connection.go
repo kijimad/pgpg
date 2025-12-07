@@ -13,20 +13,22 @@ import (
 	"github.com/jackc/pgx/v5/pgproto3"
 )
 
-type SimpleConnectionHandler struct {
-	clientConn net.Conn
-	tempDB     string
-	backendDSN string
+type ConnectionHandler struct {
+	clientConn  net.Conn
+	tempDB      string
+	backendDSN  string
+	echoQueries bool
 }
 
-func NewSimpleConnectionHandler(clientConn net.Conn, backendDSN string) *SimpleConnectionHandler {
-	return &SimpleConnectionHandler{
-		clientConn: clientConn,
-		backendDSN: backendDSN,
+func NewConnectionHandler(clientConn net.Conn, backendDSN string, echoQueries bool) *ConnectionHandler {
+	return &ConnectionHandler{
+		clientConn:  clientConn,
+		backendDSN:  backendDSN,
+		echoQueries: echoQueries,
 	}
 }
 
-func (h *SimpleConnectionHandler) Handle(ctx context.Context, createDB, dropDB func(string) error) {
+func (h *ConnectionHandler) Handle(ctx context.Context, createDB, dropDB func(string) error) {
 	defer h.clientConn.Close()
 
 	// 一時DB名を生成
@@ -74,7 +76,7 @@ func (h *SimpleConnectionHandler) Handle(ctx context.Context, createDB, dropDB f
 	}
 }
 
-func (h *SimpleConnectionHandler) handleClient(ctx context.Context, backend *pgx.Conn) error {
+func (h *ConnectionHandler) handleClient(ctx context.Context, backend *pgx.Conn) error {
 	clientBackend := pgproto3.NewBackend(h.clientConn, h.clientConn)
 
 	// スタートアップメッセージを受信
@@ -119,16 +121,16 @@ func (h *SimpleConnectionHandler) handleClient(ctx context.Context, backend *pgx
 
 	// ParameterStatus を送信
 	params := map[string]string{
-		"server_version":             "16.0",
-		"server_encoding":            "UTF8",
-		"client_encoding":            "UTF8",
-		"application_name":           "",
-		"is_superuser":               "on",
-		"session_authorization":      "postgres",
-		"DateStyle":                  "ISO, MDY",
-		"IntervalStyle":              "postgres",
-		"TimeZone":                   "UTC",
-		"integer_datetimes":          "on",
+		"server_version":              "16.0",
+		"server_encoding":             "UTF8",
+		"client_encoding":             "UTF8",
+		"application_name":            "",
+		"is_superuser":                "on",
+		"session_authorization":       "postgres",
+		"DateStyle":                   "ISO, MDY",
+		"IntervalStyle":               "postgres",
+		"TimeZone":                    "UTC",
+		"integer_datetimes":           "on",
 		"standard_conforming_strings": "on",
 	}
 
@@ -187,140 +189,69 @@ func (h *SimpleConnectionHandler) handleClient(ctx context.Context, backend *pgx
 	}
 }
 
-func (h *SimpleConnectionHandler) executeQuery(ctx context.Context, backend *pgx.Conn, query string) error {
-	rows, err := backend.Query(ctx, query)
-	if err != nil {
+func (h *ConnectionHandler) executeQuery(ctx context.Context, backend *pgx.Conn, query string) error {
+	// エコー機能が有効な場合のみエコークエリを追加
+	if h.echoQueries {
+		// クエリをエコー出力（各行に > をつける）
+		lines := strings.Split(query, "\n")
+		var quotedLines []string
+		for _, line := range lines {
+			escaped := strings.ReplaceAll(line, "'", "''")
+			quotedLines = append(quotedLines, fmt.Sprintf("'> %s'", escaped))
+		}
+		echoQuery := fmt.Sprintf("SELECT unnest(ARRAY[%s]::text[]) AS \" \"", strings.Join(quotedLines, ", "))
+
+		// エコークエリと実際のクエリを結合して送信
+		combinedQuery := echoQuery + ";\n" + query
+
+		// バックエンドの生接続を取得してプロトコルレベルで通信
+		return h.executeRawQuery(ctx, backend, combinedQuery)
+	}
+
+	// エコー機能が無効な場合は通常のクエリ実行
+	return h.executeRawQuery(ctx, backend, query)
+}
+
+func (h *ConnectionHandler) executeRawQuery(ctx context.Context, backend *pgx.Conn, query string) error {
+	// pgx.Connの生接続を使用
+	pgConn := backend.PgConn()
+	rawConn := pgConn.Conn()
+
+	// Queryメッセージを送信
+	queryMsg := &pgproto3.Query{String: query}
+	buf := queryMsg.Encode(nil)
+	if _, err := rawConn.Write(buf); err != nil {
 		return h.sendQueryError(err)
 	}
-	defer rows.Close()
 
-	// RowDescription を送信
-	fieldDescs := rows.FieldDescriptions()
-	rowDescBuf := make([]byte, 0, 1024)
-	rowDescBuf = append(rowDescBuf, 'T') // RowDescription
-	rowDescBuf = append(rowDescBuf, 0, 0, 0, 0) // length placeholder
+	// バックエンドからの応答を受信してクライアントに転送
+	backendFrontend := pgproto3.NewFrontend(rawConn, rawConn)
 
-	// フィールド数
-	rowDescBuf = append(rowDescBuf, byte(len(fieldDescs)>>8), byte(len(fieldDescs)))
-
-	for _, fd := range fieldDescs {
-		// フィールド名
-		rowDescBuf = append(rowDescBuf, []byte(fd.Name)...)
-		rowDescBuf = append(rowDescBuf, 0) // null terminator
-
-		// テーブルOID
-		tableOID := fd.TableOID
-		rowDescBuf = append(rowDescBuf, byte(tableOID>>24), byte(tableOID>>16), byte(tableOID>>8), byte(tableOID))
-
-		// Column番号
-		colNum := fd.TableAttributeNumber
-		rowDescBuf = append(rowDescBuf, byte(colNum>>8), byte(colNum))
-
-		// データ型OID
-		dataTypeOID := fd.DataTypeOID
-		rowDescBuf = append(rowDescBuf, byte(dataTypeOID>>24), byte(dataTypeOID>>16), byte(dataTypeOID>>8), byte(dataTypeOID))
-
-		// データ型サイズ
-		dataSize := fd.DataTypeSize
-		rowDescBuf = append(rowDescBuf, byte(dataSize>>8), byte(dataSize))
-
-		// Type modifier
-		typeMod := fd.TypeModifier
-		rowDescBuf = append(rowDescBuf, byte(typeMod>>24), byte(typeMod>>16), byte(typeMod>>8), byte(typeMod))
-
-		// Format code (0 = text)
-		rowDescBuf = append(rowDescBuf, 0, 0)
-	}
-
-	// length を設定
-	length := len(rowDescBuf) - 1
-	rowDescBuf[1] = byte(length >> 24)
-	rowDescBuf[2] = byte(length >> 16)
-	rowDescBuf[3] = byte(length >> 8)
-	rowDescBuf[4] = byte(length)
-
-	if _, err := h.clientConn.Write(rowDescBuf); err != nil {
-		return fmt.Errorf("send row description: %w", err)
-	}
-
-	// DataRow を送信
-	for rows.Next() {
-		values, err := rows.Values()
+	for {
+		msg, err := backendFrontend.Receive()
 		if err != nil {
-			return fmt.Errorf("get row values: %w", err)
+			return fmt.Errorf("receive from backend: %w", err)
 		}
 
-		dataRowBuf := make([]byte, 0, 1024)
-		dataRowBuf = append(dataRowBuf, 'D') // DataRow
-		dataRowBuf = append(dataRowBuf, 0, 0, 0, 0) // length placeholder
-
-		// カラム数
-		dataRowBuf = append(dataRowBuf, byte(len(values)>>8), byte(len(values)))
-
-		for _, val := range values {
-			if val == nil {
-				// NULL
-				dataRowBuf = append(dataRowBuf, 0xff, 0xff, 0xff, 0xff)
-			} else {
-				str := fmt.Sprintf("%v", val)
-				strLen := len(str)
-				dataRowBuf = append(dataRowBuf, byte(strLen>>24), byte(strLen>>16), byte(strLen>>8), byte(strLen))
-				dataRowBuf = append(dataRowBuf, []byte(str)...)
-			}
+		// メッセージをエンコードしてクライアントに送信
+		encodedBuf := msg.Encode(nil)
+		if _, err := h.clientConn.Write(encodedBuf); err != nil {
+			return fmt.Errorf("send to client: %w", err)
 		}
 
-		// length を設定
-		length := len(dataRowBuf) - 1
-		dataRowBuf[1] = byte(length >> 24)
-		dataRowBuf[2] = byte(length >> 16)
-		dataRowBuf[3] = byte(length >> 8)
-		dataRowBuf[4] = byte(length)
-
-		if _, err := h.clientConn.Write(dataRowBuf); err != nil {
-			return fmt.Errorf("send data row: %w", err)
+		// ReadyForQueryを受信したら終了
+		if _, ok := msg.(*pgproto3.ReadyForQuery); ok {
+			break
 		}
-	}
-
-	if err := rows.Err(); err != nil {
-		return h.sendQueryError(err)
-	}
-
-	// CommandComplete を送信
-	tag := rows.CommandTag().String()
-	cmdCompleteBuf := make([]byte, 0, 128)
-	cmdCompleteBuf = append(cmdCompleteBuf, 'C') // CommandComplete
-	cmdCompleteBuf = append(cmdCompleteBuf, 0, 0, 0, 0) // length placeholder
-	cmdCompleteBuf = append(cmdCompleteBuf, []byte(tag)...)
-	cmdCompleteBuf = append(cmdCompleteBuf, 0) // null terminator
-
-	// length を設定
-	cmdLength := len(cmdCompleteBuf) - 1
-	cmdCompleteBuf[1] = byte(cmdLength >> 24)
-	cmdCompleteBuf[2] = byte(cmdLength >> 16)
-	cmdCompleteBuf[3] = byte(cmdLength >> 8)
-	cmdCompleteBuf[4] = byte(cmdLength)
-
-	if _, err := h.clientConn.Write(cmdCompleteBuf); err != nil {
-		return fmt.Errorf("send command complete: %w", err)
-	}
-
-	// ReadyForQuery を送信
-	readyBuf := []byte{
-		'Z',        // ReadyForQuery
-		0, 0, 0, 5, // length
-		'I', // status (Idle)
-	}
-	if _, err := h.clientConn.Write(readyBuf); err != nil {
-		return fmt.Errorf("send ready: %w", err)
 	}
 
 	return nil
 }
 
-func (h *SimpleConnectionHandler) sendQueryError(err error) error {
+func (h *ConnectionHandler) sendQueryError(err error) error {
 	errMsg := err.Error()
 	errBuf := make([]byte, 0, 256)
-	errBuf = append(errBuf, 'E') // ErrorResponse
+	errBuf = append(errBuf, 'E')        // ErrorResponse
 	errBuf = append(errBuf, 0, 0, 0, 0) // length placeholder
 
 	// Severity
@@ -361,7 +292,7 @@ func (h *SimpleConnectionHandler) sendQueryError(err error) error {
 	return nil
 }
 
-func (h *SimpleConnectionHandler) sendError(message string) {
+func (h *ConnectionHandler) sendError(message string) {
 	backend := pgproto3.NewBackend(h.clientConn, h.clientConn)
 	errResp := &pgproto3.ErrorResponse{
 		Severity: "ERROR",
