@@ -12,7 +12,7 @@ import (
 
 func TestProxyServer(t *testing.T) {
 	// バックエンドを準備
-	backendDSN := getTestDSN()
+	backendDSN := formatDSN(testBackendPort)
 	be, err := New(backendDSN)
 	require.NoError(t, err)
 
@@ -47,7 +47,7 @@ func TestProxyServer(t *testing.T) {
 
 func TestProxyServerWithTable(t *testing.T) {
 	// バックエンドを準備
-	backendDSN := getTestDSN()
+	backendDSN := formatDSN(testBackendPort)
 	be, err := New(backendDSN)
 	require.NoError(t, err)
 
@@ -107,7 +107,7 @@ func TestProxyServerWithTable(t *testing.T) {
 
 func TestMultipleConnections(t *testing.T) {
 	// バックエンドを準備
-	backendDSN := getTestDSN()
+	backendDSN := formatDSN(testBackendPort)
 	be, err := New(backendDSN)
 	require.NoError(t, err)
 

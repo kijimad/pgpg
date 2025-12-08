@@ -32,6 +32,11 @@ func main() {
 	if err := srv.Start(); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}
+
+	log.Printf("Proxy server listening on %s:%s", proxyHost, proxyPort)
+
+	// サーバーを実行し続ける
+	select {}
 }
 
 func getEnv(key, defaultValue string) string {

@@ -10,7 +10,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	dsn := getTestDSN()
+	dsn := formatDSN(testBackendPort)
 	client, err := New(dsn)
 	require.NoError(t, err)
 
@@ -18,7 +18,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestCreateAndDropTempDB(t *testing.T) {
-	dsn := getTestDSN()
+	dsn := formatDSN(testBackendPort)
 	client, err := New(dsn)
 	require.NoError(t, err)
 
@@ -36,7 +36,7 @@ func TestCreateAndDropTempDB(t *testing.T) {
 }
 
 func TestDropTempDBWithActiveConnections(t *testing.T) {
-	dsn := getTestDSN()
+	dsn := formatDSN(testBackendPort)
 	client, err := New(dsn)
 	require.NoError(t, err)
 
@@ -54,7 +54,7 @@ func TestDropTempDBWithActiveConnections(t *testing.T) {
 }
 
 func TestDropNonexistentDB(t *testing.T) {
-	dsn := getTestDSN()
+	dsn := formatDSN(testBackendPort)
 	client, err := New(dsn)
 	require.NoError(t, err)
 

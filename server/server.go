@@ -15,6 +15,7 @@ type Server struct {
 	port        string
 	backend     *PGClient
 	echoQueries bool
+	listener    net.Listener
 }
 
 func NewServer(host, port string, backend *PGClient, echoQueries bool) *Server {
@@ -26,16 +27,14 @@ func NewServer(host, port string, backend *PGClient, echoQueries bool) *Server {
 	}
 }
 
+// サーバを開始する。ブロックしない
 func (s *Server) Start() error {
 	addr := fmt.Sprintf("%s:%s", s.host, s.port)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listen failed: %w", err)
 	}
-	defer listener.Close()
-
-	log.Printf("Proxy server listening on %s", addr)
-	log.Printf("Backend: %s", s.backend.ConnString())
+	s.listener = listener
 
 	// シグナルハンドリング
 	sigChan := make(chan os.Signal, 1)
@@ -48,15 +47,20 @@ func (s *Server) Start() error {
 	}()
 
 	// 接続を受け付ける
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Printf("Accept error: %v", err)
-			return err
-		}
+	go func() {
+		defer listener.Close()
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				log.Printf("Accept error: %v", err)
+				return
+			}
 
-		go s.handleConnection(conn)
-	}
+			go s.handleConnection(conn)
+		}
+	}()
+
+	return nil
 }
 
 func (s *Server) handleConnection(conn net.Conn) {
@@ -71,4 +75,12 @@ func (s *Server) handleConnection(conn net.Conn) {
 			return s.backend.DropTempDB(ctx, dbName)
 		},
 	)
+}
+
+// Port returns the actual port number the server is listening on
+func (s *Server) Port() int {
+	if s.listener == nil {
+		return 0
+	}
+	return s.listener.Addr().(*net.TCPAddr).Port
 }

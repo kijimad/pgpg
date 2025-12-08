@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"os/exec"
 	"testing"
 	"time"
 
@@ -11,42 +10,32 @@ import (
 )
 
 func TestIntegration_BasicQuery(t *testing.T) {
-	be, err := New("postgres://postgres@localhost:15433/postgres?sslmode=disable")
-	require.NoError(t, err)
-
-	server := NewServer("localhost", "15440", be, false)
-	go server.Start()
-	time.Sleep(500 * time.Millisecond)
+	_, port := startTestServer(t, false)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	conn := connect(ctx, t, "15440")
+	conn := connect(ctx, t, port)
 	defer conn.Close(ctx)
 
 	var result int
-	err = conn.QueryRow(ctx, "SELECT 1+1").Scan(&result)
+	err := conn.QueryRow(ctx, "SELECT 1+1").Scan(&result)
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, result)
 }
 
 func TestIntegration_CreateTable(t *testing.T) {
-	be, err := New("postgres://postgres@localhost:15433/postgres?sslmode=disable")
-	require.NoError(t, err)
-
-	server := NewServer("localhost", "15441", be, false)
-	go server.Start()
-	time.Sleep(500 * time.Millisecond)
+	_, port := startTestServer(t, false)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	conn := connect(ctx, t, "15441")
+	conn := connect(ctx, t, port)
 	defer conn.Close(ctx)
 
 	// テーブル作成
-	_, err = conn.Exec(ctx, "CREATE TABLE test_users (id INT, name TEXT)")
+	_, err := conn.Exec(ctx, "CREATE TABLE test_users (id INT, name TEXT)")
 	require.NoError(t, err)
 
 	// データ挿入
@@ -71,21 +60,16 @@ func TestIntegration_CreateTable(t *testing.T) {
 }
 
 func TestIntegration_ExplainAnalyze(t *testing.T) {
-	be, err := New("postgres://postgres@localhost:15433/postgres?sslmode=disable")
-	require.NoError(t, err)
-
-	server := NewServer("localhost", "15442", be, false)
-	go server.Start()
-	time.Sleep(500 * time.Millisecond)
+	_, port := startTestServer(t, false)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	conn := connect(ctx, t, "15442")
+	conn := connect(ctx, t, port)
 	defer conn.Close(ctx)
 
 	// テーブル作成
-	_, err = conn.Exec(ctx, "CREATE TABLE users (id INT, name TEXT)")
+	_, err := conn.Exec(ctx, "CREATE TABLE users (id INT, name TEXT)")
 	require.NoError(t, err)
 
 	// データ挿入
@@ -106,18 +90,12 @@ func TestIntegration_ExplainAnalyze(t *testing.T) {
 }
 
 func TestIntegration_EchoQuery(t *testing.T) {
-	be, err := New("postgres://postgres@localhost:15433/postgres?sslmode=disable")
-	require.NoError(t, err)
-
-	// エコー機能を有効化してサーバーを作成
-	server := NewServer("localhost", "15443", be, true)
-	go server.Start()
-	time.Sleep(500 * time.Millisecond)
+	_, port := startTestServer(t, true)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	conn := connect(ctx, t, "15443")
+	conn := connect(ctx, t, port)
 	defer conn.Close(ctx)
 
 	// シンプルなクエリを実行
@@ -141,22 +119,16 @@ func TestIntegration_EchoQuery(t *testing.T) {
 }
 
 func TestIntegration_EchoExplainQuery(t *testing.T) {
-	be, err := New("postgres://postgres@localhost:15433/postgres?sslmode=disable")
-	require.NoError(t, err)
-
-	// エコー機能を有効化してサーバーを作成
-	server := NewServer("localhost", "15444", be, true)
-	go server.Start()
-	time.Sleep(500 * time.Millisecond)
+	_, port := startTestServer(t, true)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	conn := connect(ctx, t, "15444")
+	conn := connect(ctx, t, port)
 	defer conn.Close(ctx)
 
 	// テーブルを作成
-	_, err = conn.Exec(ctx, "CREATE TABLE test_echo (id INT)")
+	_, err := conn.Exec(ctx, "CREATE TABLE test_echo (id INT)")
 	require.NoError(t, err)
 
 	// EXPLAINクエリを実行
@@ -178,13 +150,7 @@ func TestIntegration_EchoExplainQuery(t *testing.T) {
 }
 
 func TestIntegration_EchoOutputSnapshot(t *testing.T) {
-	be, err := New("postgres://postgres@localhost:15433/postgres?sslmode=disable")
-	require.NoError(t, err)
-
-	// エコー機能を有効化してサーバーを作成
-	server := NewServer("localhost", "15445", be, true)
-	go server.Start()
-	time.Sleep(500 * time.Millisecond)
+	_, port := startTestServer(t, true)
 
 	tests := []struct {
 		name     string
@@ -232,19 +198,8 @@ func TestIntegration_EchoOutputSnapshot(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cmd := exec.Command("psql",
-				"-h", "localhost",
-				"-p", "15445",
-				"-U", "postgres",
-				"-d", "postgres",
-				"-c", tt.query,
-				"-t", // タプルのみ（ヘッダーなし）
-			)
-
-			output, err := cmd.CombinedOutput()
-			require.NoError(t, err, "psql command failed: %s", string(output))
-
-			result := string(output)
+			result, err := execPsql(port, tt.query)
+			require.NoError(t, err, "psql command failed: %s", result)
 
 			// 完全一致を検証
 			assert.Equal(t, tt.expected, result, "Output should match exactly")
@@ -253,13 +208,7 @@ func TestIntegration_EchoOutputSnapshot(t *testing.T) {
 }
 
 func TestIntegration_EchoComplexSnapshot(t *testing.T) {
-	be, err := New("postgres://postgres@localhost:15433/postgres?sslmode=disable")
-	require.NoError(t, err)
-
-	// エコー機能を有効化してサーバーを作成
-	server := NewServer("localhost", "15446", be, true)
-	go server.Start()
-	time.Sleep(500 * time.Millisecond)
+	_, port := startTestServer(t, true)
 
 	// psqlで一連のクエリを実行して出力を確認
 	query := `
@@ -268,19 +217,8 @@ INSERT INTO users (name, tel) VALUES ('きじま', 100);
 SELECT name, tel FROM users;
 `
 
-	cmd := exec.Command("psql",
-		"-h", "localhost",
-		"-p", "15446",
-		"-U", "postgres",
-		"-d", "postgres",
-		"-c", query,
-		"-t",
-	)
-
-	output, err := cmd.CombinedOutput()
-	require.NoError(t, err, "psql command failed: %s", string(output))
-
-	result := string(output)
+	result, err := execPsql(port, query)
+	require.NoError(t, err, "psql command failed: %s", result)
 
 	// 期待される出力（完全一致）
 	// 注意: エコー行 "> " の末尾に空白が入る
