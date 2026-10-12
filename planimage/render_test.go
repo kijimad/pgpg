@@ -13,8 +13,8 @@ import (
 
 const nestedPlanJSON = `[{"Plan": {"Node Type": "Nested Loop", "Join Type": "Inner", "Actual Rows": 10.0, "Actual Loops": 1,
   "Plans": [
-    {"Node Type": "Index Only Scan", "Parent Relationship": "Outer", "Relation Name": "many", "Index Name": "many_x_y_idx",
-     "Index Cond": "(x = 7)", "Actual Loops": 1, "Index Searches": 1},
+    {"Node Type": "Index Only Scan", "Parent Relationship": "Outer", "Parallel Aware": false, "Relation Name": "many", "Alias": "m",
+     "Index Name": "many_x_y_idx", "Index Cond": "(x = 7)", "Filter": "(y < 'a&b')", "Actual Loops": 1, "Index Searches": 1},
     {"Node Type": "Index Only Scan", "Parent Relationship": "Inner", "Relation Name": "few", "Index Name": "few_x_y_idx",
      "Index Cond": "(y = m.y)", "Actual Loops": 10, "Index Searches": 119}
   ]},
@@ -50,29 +50,18 @@ func TestParsePlanJSON(t *testing.T) {
 	}
 }
 
-func TestPlanToDot(t *testing.T) {
-	plan, extras, err := parsePlanJSON(nestedPlanJSON)
-	require.NoError(t, err)
+const weighedPlanJSON = `[{"Plan": {"Node Type": "Hash Join", "Total Cost": 100, "Plan Rows": 10, "Actual Rows": 400, "Actual Loops": 1,
+  "Plans": [
+    {"Node Type": "Seq Scan", "Parent Relationship": "Outer", "Total Cost": 60, "Plan Rows": 500, "Actual Rows": 1500, "Actual Loops": 2,
+     "Parallel Aware": true},
+    {"Node Type": "Hash", "Parent Relationship": "Inner", "Total Cost": 10, "Plan Rows": 5, "Actual Rows": 5, "Actual Loops": 1}
+  ]}}]`
 
-	dot := planToDot(plan, extras)
-
-	t.Run("親から2つの子へ矢印が出る", func(t *testing.T) {
-		assert.Contains(t, dot, "n1 -> n2;")
-		assert.Contains(t, dot, "n1 -> n3;")
-	})
-	t.Run("決め打ちの一覧になかったキーも出る", func(t *testing.T) {
-		assert.Contains(t, dot, `Join Type: Inner\l`)
-		assert.Contains(t, dot, `Parent Relationship: Inner\l`)
-	})
-	t.Run("数値は JSON に書かれたまま出る", func(t *testing.T) {
-		assert.Contains(t, dot, `Actual Rows: 10.0\l`)
-	})
-	t.Run("キーは JSON の順番で出る", func(t *testing.T) {
-		assert.Contains(t, dot, `Index Only Scan\lParent Relationship: Outer\lRelation Name: many\lIndex Name: many_x_y_idx\l`)
-	})
-	t.Run("計画の外の最上位のキーも出る", func(t *testing.T) {
-		assert.Contains(t, dot, `summary [shape=note, label="Planning Time: 0.123\l"];`)
-	})
+func TestCommas(t *testing.T) {
+	assert.Equal(t, "0", commas(0))
+	assert.Equal(t, "999", commas(999))
+	assert.Equal(t, "300,000", commas(300000))
+	assert.Equal(t, "1,234,567", commas(1234567))
 }
 
 func TestFormatValue(t *testing.T) {
@@ -81,10 +70,7 @@ func TestFormatValue(t *testing.T) {
 		formatValue(object{{"Worker Number", json.Number("0")}, {"Actual Rows", json.Number("5")}}))
 	assert.Equal(t, "true", formatValue(true))
 	assert.Equal(t, "null", formatValue(nil))
-}
-
-func TestDotLabel(t *testing.T) {
-	assert.Equal(t, `Filter: (name = \"a\\b\")\l`, dotLabel([]string{`Filter: (name = "a\b")`}))
+	assert.Equal(t, "[]", formatValue([]any{}))
 }
 
 func TestPlanImageName(t *testing.T) {

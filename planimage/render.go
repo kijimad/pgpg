@@ -1,14 +1,13 @@
 package planimage
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -138,6 +137,9 @@ func formatValue(v any) string {
 		}
 		return "false"
 	case []any:
+		if len(x) == 0 {
+			return "[]"
+		}
 		parts := make([]string, len(x))
 		for i, e := range x {
 			parts[i] = formatValue(e)
@@ -154,58 +156,76 @@ func formatValue(v any) string {
 	}
 }
 
-func dotLabel(lines []string) string {
-	var b strings.Builder
-	for _, line := range lines {
-		line = strings.ReplaceAll(line, `\`, `\\`)
-		line = strings.ReplaceAll(line, `"`, `\"`)
-		line = strings.ReplaceAll(line, "\n", `\l`)
-		// \l は Graphviz で「左寄せして改行」
-		b.WriteString(line + `\l`)
+func number(o object, key string) (float64, bool) {
+	v, ok := o.get(key)
+	if !ok {
+		return 0, false
 	}
-	return b.String()
+	n, ok := v.(json.Number)
+	if !ok {
+		return 0, false
+	}
+	f, err := n.Float64()
+	return f, err == nil
 }
 
-// 情報を落とさないよう、子(Plans)以外のキーを全部、JSON の順番で出す
-func planToDot(plan object, extras object) string {
-	var b strings.Builder
-	b.WriteString("digraph plan {\n")
-	b.WriteString("  node [shape=box, fontname=\"monospace\"];\n")
-	count := 0
-	var node func(p object) string
-	node = func(p object) string {
-		count++
-		id := fmt.Sprintf("n%d", count)
-		nodeType, _ := p.get("Node Type")
-		lines := []string{formatValue(nodeType)}
-		var children []any
-		for _, f := range p {
-			switch f.Key {
-			case "Node Type":
-			case "Plans":
-				children, _ = f.Value.([]any)
-			default:
-				lines = append(lines, f.Key+": "+formatValue(f.Value))
-			}
+func children(p object) []object {
+	v, _ := p.get("Plans")
+	arr, _ := v.([]any)
+	var cs []object
+	for _, c := range arr {
+		if o, ok := c.(object); ok {
+			cs = append(cs, o)
 		}
-		fmt.Fprintf(&b, "  %s [label=\"%s\"];\n", id, dotLabel(lines))
-		for _, c := range children {
-			if child, ok := c.(object); ok {
-				fmt.Fprintf(&b, "  %s -> %s;\n", id, node(child))
-			}
-		}
-		return id
 	}
-	node(plan)
-	if len(extras) > 0 {
-		lines := make([]string, len(extras))
-		for i, f := range extras {
-			lines[i] = f.Key + ": " + formatValue(f.Value)
+	return cs
+}
+
+// totalRows は、ノードが親に渡した行数の合計。Actual Rows はループ1回あたりの平均なので Loops を掛ける
+func totalRows(p object) (rows float64, actual bool) {
+	if r, ok := number(p, "Actual Rows"); ok {
+		loops, ok := number(p, "Actual Loops")
+		if !ok {
+			loops = 1
 		}
-		fmt.Fprintf(&b, "  summary [shape=note, label=\"%s\"];\n", dotLabel(lines))
+		return r * loops, true
 	}
-	b.WriteString("}\n")
-	return b.String()
+	r, _ := number(p, "Plan Rows")
+	return r, false
+}
+
+// weight は、ノードの重さ。時間があれば時間(ループ全体)、なければコストを使う
+func weight(p object, useTime bool) float64 {
+	if useTime {
+		t, _ := number(p, "Actual Total Time")
+		loops, ok := number(p, "Actual Loops")
+		if !ok {
+			loops = 1
+		}
+		return t * loops
+	}
+	c, _ := number(p, "Total Cost")
+	return c
+}
+
+// selfShare は、子の分を引いたノード自身の重さが、計画全体の何割か。重さがわからなければ ok は false
+func selfShare(p object, root float64, useTime bool) (float64, bool) {
+	if root <= 0 {
+		return 0, false
+	}
+	self := weight(p, useTime)
+	for _, c := range children(p) {
+		self -= weight(c, useTime)
+	}
+	return math.Max(self, 0) / root, true
+}
+
+func commas(f float64) string {
+	s := fmt.Sprintf("%.0f", f)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
 }
 
 // 同じクエリなら同じ名前にして、実行し直したときは上書きする
@@ -227,12 +247,12 @@ func (pi *PlanImage) Render(planJSON, query string, index int) (string, error) {
 	if err := os.MkdirAll(pi.Dir, 0o755); err != nil {
 		return "", fmt.Errorf("画像のディレクトリを作れません: %w", err)
 	}
-	cmd := exec.Command("dot", "-Tsvg", "-o", filepath.Join(pi.Dir, name))
-	cmd.Stdin = strings.NewReader(planToDot(plan, extras))
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("Graphviz で描けません: %v: %s", err, stderr.String())
+	svg, err := renderSVG(plan, extras)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(pi.Dir, name), []byte(svg), 0o644); err != nil {
+		return "", fmt.Errorf("画像を書けません: %w", err)
 	}
 	return fmt.Sprintf("[[file:%s%s]]", pi.LinkPrefix, name), nil
 }

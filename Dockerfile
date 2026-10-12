@@ -1,4 +1,4 @@
-FROM golang:1.24 AS builder
+FROM golang:1.26 AS builder
 
 WORKDIR /app
 
@@ -13,7 +13,6 @@ FROM debian:bookworm-slim
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     graphviz \
-    fonts-ipafont-gothic \
  && rm -rf /var/lib/apt/lists/*
 
 # root 以外で動かすと fontconfig のキャッシュを書けないため
