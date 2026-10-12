@@ -18,13 +18,15 @@ type ConnectionHandler struct {
 	tempDB      string
 	backendDSN  string
 	echoQueries bool
+	newRewriter RewriterFactory
 }
 
-func NewConnectionHandler(clientConn net.Conn, backendDSN string, echoQueries bool) *ConnectionHandler {
+func NewConnectionHandler(clientConn net.Conn, backendDSN string, echoQueries bool, newRewriter RewriterFactory) *ConnectionHandler {
 	return &ConnectionHandler{
 		clientConn:  clientConn,
 		backendDSN:  backendDSN,
 		echoQueries: echoQueries,
+		newRewriter: newRewriter,
 	}
 }
 
@@ -227,16 +229,24 @@ func (h *ConnectionHandler) executeRawQuery(ctx context.Context, backend *pgx.Co
 	// バックエンドからの応答を受信してクライアントに転送
 	backendFrontend := pgproto3.NewFrontend(rawConn, rawConn)
 
+	var rw Rewriter
+	if h.newRewriter != nil {
+		rw = h.newRewriter(query)
+	}
+
 	for {
 		msg, err := backendFrontend.Receive()
 		if err != nil {
 			return fmt.Errorf("receive from backend: %w", err)
 		}
 
-		// メッセージをエンコードしてクライアントに送信
-		encodedBuf := msg.Encode(nil)
-		if _, err := h.clientConn.Write(encodedBuf); err != nil {
-			return fmt.Errorf("send to client: %w", err)
+		out := []pgproto3.BackendMessage{msg}
+		if rw != nil {
+			out = rw.Rewrite(msg)
+		}
+
+		if err := h.sendToClient(out...); err != nil {
+			return err
 		}
 
 		// ReadyForQueryを受信したら終了
@@ -245,6 +255,15 @@ func (h *ConnectionHandler) executeRawQuery(ctx context.Context, backend *pgx.Co
 		}
 	}
 
+	return nil
+}
+
+func (h *ConnectionHandler) sendToClient(msgs ...pgproto3.BackendMessage) error {
+	for _, msg := range msgs {
+		if _, err := h.clientConn.Write(msg.Encode(nil)); err != nil {
+			return fmt.Errorf("send to client: %w", err)
+		}
+	}
 	return nil
 }
 

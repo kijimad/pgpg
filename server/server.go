@@ -15,6 +15,7 @@ type Server struct {
 	port        string
 	backend     *PGClient
 	echoQueries bool
+	newRewriter RewriterFactory
 	listener    net.Listener
 }
 
@@ -25,6 +26,11 @@ func NewServer(host, port string, backend *PGClient, echoQueries bool) *Server {
 		backend:     backend,
 		echoQueries: echoQueries,
 	}
+}
+
+func (s *Server) WithRewriter(f RewriterFactory) *Server {
+	s.newRewriter = f
+	return s
 }
 
 // サーバを開始する。ブロックしない
@@ -66,7 +72,7 @@ func (s *Server) Start() error {
 func (s *Server) handleConnection(conn net.Conn) {
 	ctx := context.Background()
 
-	handler := NewConnectionHandler(conn, s.backend.ConnString(), s.echoQueries)
+	handler := NewConnectionHandler(conn, s.backend.ConnString(), s.echoQueries, s.newRewriter)
 	handler.Handle(ctx,
 		func(dbName string) error {
 			return s.backend.CreateTempDB(ctx, dbName)

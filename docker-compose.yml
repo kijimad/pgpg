@@ -20,9 +20,28 @@ services:
       PG_BACKEND: postgres://postgres@postgres/postgres
       PG_PROXY_HOST: 0.0.0.0
       PG_PROXY_PORT: 15432
-      PG_ECHO_QUERIES: "on"
+      PG_MODE: echo
     ports:
       - "15432:15432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  pg-plan-image:
+    build: .
+    environment:
+      PG_BACKEND: postgres://postgres@postgres/postgres
+      PG_PROXY_HOST: 0.0.0.0
+      PG_PROXY_PORT: 15431
+      PG_MODE: plan-image
+      PG_PLAN_IMAGE_DIR: /images
+      PG_PLAN_IMAGE_LINK_PREFIX: images/
+    user: "${PLAN_UID:-1000}:${PLAN_GID:-1000}"
+    volumes:
+      - ${PLAN_IMAGE_HOST_DIR:-${HOME}/roam/images}:/images
+    ports:
+      - "15431:15431"
     depends_on:
       postgres:
         condition: service_healthy
